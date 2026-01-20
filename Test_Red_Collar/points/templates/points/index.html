@@ -1,0 +1,266 @@
+
+    <!DOCTYPE html>
+<html>
+<head>
+    <title>Карта</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        #map { height: 500px; width: 100%; margin-top: 10px; }
+        .hidden { display: none; }
+        .error { color: red; font-weight: bold; margin: 10px 0; }
+    </style>
+</head>
+<body>
+
+    <div id="auth-ui">
+        <h3 id="auth-title">Регистрация</h3>
+        <input type="text" id="user" placeholder="Логин">
+        <input type="email" id="email" placeholder="Email">
+        <input type="password" id="pass" placeholder="Пароль">
+	<input type="password" id="pass_confirm" placeholder="Повторите пароль">
+
+        <button id="auth-btn" onclick="handleAuth()">Создать аккаунт</button>
+
+        <p onclick="toggleAuth()" style="cursor:pointer; color:blue; text-decoration: underline;">
+            <span id="toggle-text">Уже зарегистрированы? Войти</span>
+        </p>
+        <div id="err" class="error"></div>
+    </div>
+
+<div id="app-ui" class="hidden">
+    <div style="margin-bottom: 10px;">
+
+        <button onclick="getLocation()">📍 Мое местоположение</button>
+
+        <input type="number" id="lat-input" placeholder="Широта (Lat)" step="any" style="width: 100px;">
+        <input type="number" id="lng-input" placeholder="Долгота (Lng)" step="any" style="width: 100px;">
+        <input type="number" id="radius-val" placeholder="Радиус (км)" style="width: 80px;">
+
+        <button onclick="search_in_radius()">Точки в радиусе</button>
+
+        <button id="toggle-add-btn" onclick="toggleMapMode()">Добавить точку</button>
+        
+	<button id="clear-btn" onclick="clearMap()">Очистить карту</button>
+
+        <button onclick="localStorage.clear(); location.reload()">Выйти</button>
+
+    </div>
+    <div id="map"></div>
+</div>
+
+
+<script>
+       
+let map;
+let markersGroup;
+let isLoginMode = false;
+let isAddMode = false;
+let userLocationMarker = null;
+
+window.onload = () => {
+    if (localStorage.getItem('userToken')) {
+        document.getElementById('auth-ui').classList.add('hidden');
+        document.getElementById('app-ui').classList.remove('hidden');
+        initMap();
+    }
+};
+
+function initMap() {
+    if (map) return;
+    map = L.map('map').setView([55.75, 37.61], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+    markersGroup = L.layerGroup().addTo(map);
+
+    map.on('click', async (e) => {
+        if (!isAddMode) return;
+        const name = prompt("Название точки:");
+        if (!name) return;
+
+        const tempMarker = L.marker([e.latlng.lat, e.latlng.lng])
+            .addTo(markersGroup)
+            .bindPopup("<i>Сохранение...</i>");
+
+        try {
+            const res = await fetch('/api/locations/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Token ' + localStorage.getItem('userToken')
+                },
+                body: JSON.stringify({
+                    name: name,
+                    location: { type: "Point", coordinates: [e.latlng.lng, e.latlng.lat] }
+                })
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                const locId = data.id;
+
+                let content = `<b>${name}</b><hr>`;
+                content += `<div id="comments-list-${locId}"><small>Комментариев нет</small></div><hr>`;
+                content += `<textarea id="t-${locId}" style="width:100%" placeholder="Ваш отзыв"></textarea>
+                            <button onclick="sendComment(${locId})" style="width:100%">Отправить</button>`;
+
+                tempMarker.setPopupContent(content);
+                alert("Точка сохранена!");
+            } else {
+                markersGroup.removeLayer(tempMarker);
+                alert("Ошибка сохранения: проверьте права доступа.");
+            }
+        } catch (err) { 
+            markersGroup.removeLayer(tempMarker);
+            alert("Ошибка сети"); 
+        }
+    });
+}
+
+function toggleAuth() {
+    isLoginMode = !isLoginMode;
+    document.getElementById('auth-title').innerText = isLoginMode ? "Вход" : "Регистрация";
+    document.getElementById('auth-btn').innerText = isLoginMode ? "Войти" : "Создать аккаунт";
+    
+    const emailField = document.getElementById('email');
+    const passConfirmField = document.getElementById('pass_confirm');
+    
+    if (emailField) emailField.style.display = isLoginMode ? "none" : "block";
+    if (passConfirmField) passConfirmField.style.display = isLoginMode ? "none" : "block";
+    
+    document.getElementById('err').innerText = "";
+}
+
+async function handleAuth() {
+    const user = document.getElementById('user').value;
+    const pass = document.getElementById('pass').value;
+    const errDiv = document.getElementById('err');
+    
+    if (!user || !pass) {
+        errDiv.innerText = "Заполните логин и пароль";
+        return;
+    }
+
+    const url = isLoginMode ? '/api/login/' : '/api/register/';
+    const body = { username: user, password: pass };
+    
+    if (!isLoginMode) {
+        body.email = document.getElementById('email').value;
+        body.password_confirm = document.getElementById('pass_confirm').value;
+    }
+
+    try {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        
+        const data = await res.json();
+        
+        if (res.ok) {
+            localStorage.setItem('userToken', data.token);
+            document.getElementById('auth-ui').classList.add('hidden');
+            document.getElementById('app-ui').classList.remove('hidden');
+            initMap();
+        } else {
+            errDiv.innerText = data.error || data.detail || JSON.stringify(data);
+        }
+    } catch (e) { 
+        errDiv.innerText = "Ошибка сервера. Проверьте соединение."; 
+    }
+}
+async function search_in_radius() {
+    const lat = document.getElementById('lat-input').value;
+    const lng = document.getElementById('lng-input').value;
+    const radius = document.getElementById('radius-val').value;
+
+    if (!lat || !lng || !radius) return alert("Введите все данные для поиска");
+
+    try {
+        const res = await fetch(`/api/nearby/?lat=${lat}&lng=${lng}&r=${radius}`, {
+            headers: { 'Authorization': 'Token ' + localStorage.getItem('userToken') }
+        });
+        const data = await res.json();
+        markersGroup.clearLayers();
+
+        L.circle([lat, lng], { radius: radius * 1000, color: 'red', fillOpacity: 0.1 }).addTo(markersGroup);
+
+        data.features.forEach(f => {
+            const [pLng, pLat] = f.geometry.coordinates;
+            let content = `<b>${f.properties.name}</b><br><small>Дистанция: ${parseFloat(f.properties.dist).toFixed(2)} км</small><hr>`;
+            content += `<textarea id="t-${f.id}" style="width:100%" placeholder="Ваш отзыв"></textarea>
+                        <button onclick="sendComment(${f.id})" style="width:100%">Отправить</button>`;
+            L.marker([pLat, pLng]).addTo(markersGroup).bindPopup(content);
+        });
+    } catch (e) { alert("Ошибка при поиске точек"); }
+}
+
+function getLocation() {
+    if (!navigator.geolocation) return alert("Геолокация не поддерживается");
+
+    navigator.geolocation.getCurrentPosition((p) => {
+        const lat = p.coords.latitude;
+        const lng = p.coords.longitude;
+        document.getElementById('lat-input').value = lat.toFixed(6);
+        document.getElementById('lng-input').value = lng.toFixed(6);
+        
+        map.setView([lat, lng], 13);
+
+        if (userLocationMarker) map.removeLayer(userLocationMarker);
+        userLocationMarker = L.marker([lat, lng], { zIndexOffset: 1000 }).addTo(map)
+            .bindPopup("Вы здесь").openPopup();
+    }, () => alert("Не удалось получить доступ к местоположению"));
+}
+
+function toggleMapMode() {
+    isAddMode = !isAddMode;
+    const btn = document.getElementById('toggle-add-btn');
+    if (btn) {
+        btn.innerText = isAddMode ? "Режим: Добавление" : "Режим: Просмотр";
+        btn.style.backgroundColor = isAddMode ? "#ffcccc" : "";
+    }
+}
+
+async function sendComment(locId) {
+    const inputElement = document.getElementById(`t-${locId}`);
+
+    if (!inputElement) {
+     console.error("Поле ввода не найдено для ID:", locId);
+        return;
+     }
+
+     const text = inputElement.value;
+     if (!text) return;
+
+try {
+    const res = await fetch('/api/comments/', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Token ' + localStorage.getItem('userToken')
+        },
+        body: JSON.stringify({ 
+             location: locId, 
+	     text: text })
+    });
+
+    if (res.ok) { 
+        alert("Комментарий добавлен!");
+	inputElement.value = "";
+        //document.getElementById(`t-${locId}`).value = "";
+        search_in_radius(); 
+    } else {
+        const data = await res.json();
+        //console.error("Ошибка сервера:", data);
+        alert("Ошибка при отправке: " + JSON.stringify(data));
+    } 
+} catch (e) { 
+    alert("Не удалось отправить комментарий"); 
+}
+}
+function clearMap() {
+    markersGroup.clearLayers();
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+Django>=4.2
+psycopg2-binary>=2.9.5
+djangorestframework
+djangorestframework-gis
+django-environ
+psycopg2-binary
+python-dotenv
+django-leaflet
